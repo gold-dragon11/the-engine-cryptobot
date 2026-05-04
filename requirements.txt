@@ -1,0 +1,9 @@
+python-telegram-bot==21.5
+ccxt==4.3.76
+requests==2.32.3
+python-dotenv==1.0.1
+feedparser==6.0.11
+google-genai>=1.10.0
+pandas>=2.0.0
+ta>=0.11.0
+python-binance>=1.0.19
