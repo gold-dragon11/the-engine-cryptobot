@@ -17,6 +17,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
+from typing import Optional
 
 from config import RSS_FEEDS
 
@@ -90,7 +91,7 @@ class NewsItem:
 
 # ── Helpers ───────────────────────────────────────────────────
 
-def _parse_datetime(pub_str: str) -> datetime | None:
+def _parse_datetime(pub_str: str) -> Optional[datetime]:
     """
     Parse an RSS publication string to a timezone-aware UTC datetime.
     Supports RFC 2822 and ISO 8601. Returns None on failure.
@@ -153,7 +154,7 @@ def _match_macro(text: str) -> bool:
     return False
 
 
-def _is_fresh(dt: datetime | None) -> bool:
+def _is_fresh(dt: Optional[datetime]) -> bool:
     """Return True iff the item's publication datetime is within the last 24 hours."""
     if dt is None:
         return False   # No parseable date → treat as stale

@@ -53,6 +53,14 @@ class DatabaseManager:
             )
         ''')
         
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS users (
+                user_id INTEGER PRIMARY KEY,
+                language TEXT DEFAULT 'en',
+                is_active INTEGER DEFAULT 0
+            )
+        ''')
+        
         # Simple migration: Add missing columns if they don't exist
         cursor.execute("PRAGMA table_info(signals)")
         columns = [info[1] for info in cursor.fetchall()]
@@ -74,6 +82,15 @@ class DatabaseManager:
                     logger.info(f"DB Migration: Added column '{col}' to 'signals' table.")
                 except Exception as e:
                     logger.error(f"Migration error column {col}: {e}")
+
+        cursor.execute("PRAGMA table_info(users)")
+        user_columns = [info[1] for info in cursor.fetchall()]
+        if "is_active" not in user_columns:
+            try:
+                cursor.execute("ALTER TABLE users ADD COLUMN is_active INTEGER DEFAULT 0")
+                logger.info("DB Migration: Added column 'is_active' to 'users' table.")
+            except Exception as e:
+                logger.error(f"Migration error column is_active: {e}")
 
         cursor.execute("PRAGMA journal_mode=WAL;")
         conn.commit()
@@ -124,6 +141,51 @@ class DatabaseManager:
         ''', (trend, datetime.now(), ticker))
         conn.commit()
         conn.close()
+
+    def get_user_language(self, user_id: int) -> str:
+        conn = self._connect()
+        cursor = conn.cursor()
+        cursor.execute("SELECT language FROM users WHERE user_id = ?", (user_id,))
+        row = cursor.fetchone()
+        conn.close()
+        return row[0] if row else "en"
+
+    def set_user_language(self, user_id: int, language: str):
+        conn = self._connect()
+        cursor = conn.cursor()
+        cursor.execute('''
+            INSERT INTO users (user_id, language) VALUES (?, ?)
+            ON CONFLICT(user_id) DO UPDATE SET language = excluded.language
+        ''', (user_id, language))
+        conn.commit()
+        conn.close()
+
+    def is_bot_activated(self) -> bool:
+        conn = self._connect()
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM users WHERE is_active = 1")
+        count = cursor.fetchone()[0]
+        conn.close()
+        return count > 0
+
+    def activate_user(self, user_id: int):
+        conn = self._connect()
+        cursor = conn.cursor()
+        cursor.execute('''
+            INSERT INTO users (user_id, language, is_active) VALUES (?, 'en', 1)
+            ON CONFLICT(user_id) DO UPDATE SET is_active = 1
+        ''', (user_id,))
+        conn.commit()
+        conn.close()
+
+    def reset_all_activations(self):
+        """Reset all users to inactive state. Called on bot startup for clean dormant boot."""
+        conn = self._connect()
+        cursor = conn.cursor()
+        cursor.execute("UPDATE users SET is_active = 0")
+        conn.commit()
+        conn.close()
+        logger.info("DB: All user activations reset. Bot is now dormant.")
 
     def get_market_prices(self):
         """Returns a dict of ticker -> price."""

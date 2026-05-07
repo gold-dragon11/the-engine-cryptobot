@@ -21,6 +21,8 @@ import re
 import time
 from dataclasses import dataclass
 
+from typing import Optional
+
 from google import genai
 
 from config import GEMINI_API_KEY, GEMINI_MODEL
@@ -54,6 +56,7 @@ class SentimentResult:
     direction:  str     # "LONG", "SHORT", or "WAIT"
     confidence: int     # 1-10
     reasoning:  str     # Concise explanation from the LLM
+    leverage:   int     # Recommended leverage (2-12)
     model_used: str     # Which model produced the result
 
 
@@ -63,6 +66,7 @@ def _neutral(reason: str, model: str = _GEMINI_MODEL) -> SentimentResult:
         direction="WAIT",
         confidence=0,
         reasoning=reason,
+        leverage=1,
         model_used=model,
     )
 
@@ -91,11 +95,16 @@ def _parse_ai_json(text: str) -> SentimentResult:
             confidence = 0
             
         reasoning = str(data.get("reasoning", ""))
-        
+        try:
+            leverage = int(data.get("leverage", 1))
+        except (ValueError, TypeError):
+            leverage = 1
+            
         return SentimentResult(
             direction=direction,
             confidence=max(1, min(10, confidence)) if direction != "WAIT" else confidence,
             reasoning=reasoning,
+            leverage=leverage,
             model_used=_GEMINI_MODEL,
         )
     except Exception as exc:
@@ -104,6 +113,7 @@ def _parse_ai_json(text: str) -> SentimentResult:
             direction="WAIT",
             confidence=0,
             reasoning="AI returned malformed data. Waiting for clearer conditions.",
+            leverage=1,
             model_used=_GEMINI_MODEL,
         )
 
@@ -117,14 +127,14 @@ def _is_rate_limit_error(exc: Exception) -> bool:
 def analyze_sentiment(
     coin_name:   str,
     news_text:   str            = "",     # Micro news (coin-specific)
-    price:       float | None   = None,
-    volume_24h:  float | None   = None,
+    price:       Optional[float] = None,
+    volume_24h:  Optional[float] = None,
     fng_display: str            = "N/A",
     macro_text:  str            = "",     # Macro news (global triggers)
-    atr_14:      float | None   = None,
-    rsi_14:      float | None   = None,
-    support:     float | None   = None,
-    resistance:  float | None   = None,
+    atr_14:      Optional[float] = None,
+    rsi_14:      Optional[float] = None,
+    support:     Optional[float] = None,
+    resistance:  Optional[float] = None,
     lang:        str            = "en",   # User's selected language code
 ) -> SentimentResult:
     """
@@ -206,18 +216,20 @@ def analyze_sentiment(
         f"{micro_section}\n\n"
         f"Weigh all data: price action, RSI, ATR volatility, Fear & Greed, "
         f"support/resistance levels, macro catalysts, and coin-specific news.\n"
-        f"EVALUATE if fundamental news supports or contradicts the technical structure (e.g., if price is near resistance but news is extremely bullish, consider LONG for a breakout, or WAIT, but never blindly SHORT).\n\n"
+        f"EVALUATE if fundamental news supports or contradicts the technical structure (e.g., if price is near resistance but news is extremely bullish, consider LONG for a breakout, or WAIT, but never blindly SHORT).\n"
+        f"Evaluate market volatility, news context, and distance to Stop Loss to determine a 'Professional Recommended Leverage'. Leverage must be conservative. Range: 2x to 10x. Never exceed 12x even in high-confidence setups.\n\n"
         f"Provide your response STRICTLY as a parseable JSON object:\n"
         f"{{\n"
         f'  "direction": "LONG" | "SHORT" | "WAIT",\n'
         f'  "confidence": <integer between 1 and 10>,\n'
-        f'  "reasoning": "<2-3 concise sentences in Ukrainian>"\n'
+        f'  "reasoning": "<2-3 concise sentences in Ukrainian>",\n'
+        f'  "leverage": <integer between 2 and 12>\n'
         f"}}"
     )
 
     # ── Retry loop (up to 3 attempts on 429) ──────────────────────────
     client = genai.Client(api_key=GEMINI_API_KEY)
-    last_exc: Exception | None = None
+    last_exc: Optional[Exception] = None
 
     for attempt in range(1, _MAX_RETRIES + 1):
         try:
@@ -272,7 +284,7 @@ def parse_strategy_json(text: str) -> dict:
         return json.loads(clean_text)
     except Exception as exc:
         logger.error(f"Failed to parse strategy JSON: {exc}. Raw text: {clean_text}")
-        return {"decision": "WAIT", "type": "NONE", "tp": 0.0, "sl": 0.0, "comment": "Parse error"}
+        return {"decision": "WAIT", "type": "NONE", "tp": 0.0, "sl": 0.0, "leverage": 1, "comment": "Parse error"}
 
 
 def analyze_strategy(ticker: str, price: float, btc_trend: str, support: float, resistance: float, atr: float, rsi: float) -> dict:
@@ -305,15 +317,18 @@ def analyze_strategy(ticker: str, price: float, btc_trend: str, support: float, 
         f"• ATR(14): ${atr:,.4f}\n"
         f"• RSI(14): {rsi:.1f}\n\n"
         f"RULES:\n"
-        f"1. If RSI is neutral and there's no clear structural edge, return WAIT.\n"
-        f"2. If going LONG, set SL slightly below Support, and TP near Resistance or at least 1:1.5 offset.\n"
-        f"3. Return strictly a raw JSON object (no markdown, no extra text).\n\n"
+        f"1. You are a professional risk manager. If the calculated Take Profit is too close to the Entry price, resulting in a poor Risk/Reward ratio, you MUST set the 'decision' to 'WAIT' and explain that the setup is mathematically unfavorable.\n"
+        f"2. If RSI is neutral and there's no clear structural edge, return WAIT.\n"
+        f"3. If going LONG, set SL slightly below Support, and TP near Resistance or at least 1:1.5 offset.\n"
+        f"4. Evaluate market volatility, news context, and distance to Stop Loss to determine a 'Professional Recommended Leverage'. Leverage must be conservative. Range: 2x to 10x. Never exceed 12x even in high-confidence setups.\n"
+        f"5. Return strictly a raw JSON object (no markdown, no extra text).\n\n"
         f"OUTPUT FORMAT:\n"
         f"{{\n"
         f'  "decision": "GO" | "WAIT",\n'
         f'  "type": "LONG" | "SHORT",\n'
         f'  "tp": <float>,\n'
         f'  "sl": <float>,\n'
+        f'  "leverage": <integer between 2 and 12>,\n'
         f'  "comment": "<1 short sentence explanation in Ukrainian>"\n'
         f"}}"
     )

@@ -23,6 +23,7 @@ try:
 except ImportError:
     _TA_AVAILABLE = False
 
+from typing import Optional
 from dataclasses import dataclass
 from config import BINANCE_API_KEY, BINANCE_API_SECRET
 
@@ -176,8 +177,8 @@ class MarketStructure:
     """Result of full market-structure analysis on OHLCV candles."""
     support:    float          # Lowest low of the look-back window (48 h)
     resistance: float          # Highest high of the look-back window (48 h)
-    atr_14:     float | None   # Average True Range (14-period) on 1h candles
-    rsi_14:     float | None   # RSI(14) on 1h candles
+    atr_14:     Optional[float] # Average True Range (14-period) on 1h candles
+    rsi_14:     Optional[float] # RSI(14) on 1h candles
     candles:    int            # Number of candles used in the analysis
 
 
@@ -185,7 +186,7 @@ def fetch_market_structure(
     symbol:    str,
     timeframe: str = "1h",
     limit:     int = 100,
-) -> MarketStructure | None:
+) -> Optional[MarketStructure]:
     """
     Fetch 1-hour OHLCV candles from Binance and derive market structure.
 

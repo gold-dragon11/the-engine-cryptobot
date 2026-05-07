@@ -1,17 +1,17 @@
 {
   "notifier": {
-    "signal_header": "{icon} *THE ENGINE SIGNAL ALERT* {icon}",
-    "asset": "📈 *Asset:*  {ticker}",
-    "action": "🎯 *Action:* _{type}_",
-    "entry_price": "📌 *Entry Price:* `{entry}`",
-    "targets_title": "🏆 *Targets:*",
-    "tp_level": "  TP{level}: `{tp}`",
-    "stop_loss": "🛑 *Stop Loss:* `{sl}`",
-    "ai_audit": "🧠 *AI Audit:* _{comment}_",
-    "status_header": "🐉 *Engine Status Update* 🐉",
-    "status_system": "⚡ *System:* Active & Scanning",
-    "active_signals": "📊 *Active Signals:* `{count}`",
-    "btc_trend": "🛡️ *BTC Macro Trend:* *{trend}*"
+    "signal_header": "{icon} <b>THE ENGINE SIGNAL ALERT</b> {icon}",
+    "asset": "📈 <b>Asset:</b>  {ticker}",
+    "action": "🎯 <b>Action:</b> <i>{type}</i>",
+    "entry_price": "📌 <b>Entry Price:</b> <code>{entry}</code>",
+    "targets_title": "🏆 <b>Targets:</b>",
+    "tp_level": "  TP{level}: <code>{tp}</code>",
+    "stop_loss": "🛑 <b>Stop Loss:</b> <code>{sl}</code>",
+    "ai_audit": "🧠 <b>AI Audit:</b> <i>{comment}</i>",
+    "status_header": "🐉 <b>Engine Status Update</b> 🐉",
+    "status_system": "⚡ <b>System:</b> Active & Scanning",
+    "active_signals": "📊 <b>Active Signals:</b> <code>{count}</code>",
+    "btc_trend": "🛡️ <b>BTC Macro Trend:</b> <b>{trend}</b>"
   },
   "watcher": {
     "signal_header": "🚨 <b>[SHADOW OF THE DRAGON - AUTO SIGNAL]</b> 🚨",

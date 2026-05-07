@@ -1,17 +1,17 @@
 {
   "notifier": {
-    "signal_header": "{icon} *СИГНАЛ THE ENGINE* {icon}",
-    "asset": "📈 *Актив:*  {ticker}",
-    "action": "🎯 *Дія:* _{type}_",
-    "entry_price": "📌 *Ціна входу:* `{entry}`",
-    "targets_title": "🏆 *Цілі:*",
-    "tp_level": "  TP{level}: `{tp}`",
-    "stop_loss": "🛑 *Stop Loss:* `{sl}`",
-    "ai_audit": "🧠 *ШІ Аналіз:* _{comment}_",
-    "status_header": "🐉 *Статус The Engine* 🐉",
-    "status_system": "⚡ *Система:* Активна і сканує",
-    "active_signals": "📊 *Активних сигналів:* `{count}`",
-    "btc_trend": "🛡️ *Макротренд BTC:* *{trend}*"
+    "signal_header": "{icon} <b>СИГНАЛ THE ENGINE</b> {icon}",
+    "asset": "📈 <b>Актив:</b>  {ticker}",
+    "action": "🎯 <b>Дія:</b> <i>{type}</i>",
+    "entry_price": "📌 <b>Ціна входу:</b> <code>{entry}</code>",
+    "targets_title": "🏆 <b>Цілі:</b>",
+    "tp_level": "  TP{level}: <code>{tp}</code>",
+    "stop_loss": "🛑 <b>Stop Loss:</b> <code>{sl}</code>",
+    "ai_audit": "🧠 <b>ШІ Аналіз:</b> <i>{comment}</i>",
+    "status_header": "🐉 <b>Статус The Engine</b> 🐉",
+    "status_system": "⚡ <b>Система:</b> Активна і сканує",
+    "active_signals": "📊 <b>Активних сигналів:</b> <code>{count}</code>",
+    "btc_trend": "🛡️ <b>Макротренд BTC:</b> <b>{trend}</b>"
   },
   "watcher": {
     "signal_header": "🚨 <b>[SHADOW OF THE DRAGON - АВТО СИГНАЛ]</b> 🚨",

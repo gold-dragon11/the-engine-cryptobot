@@ -2,7 +2,7 @@ import logging
 import time
 from modules.finance import fetch_market_structure
 from modules.ai_analyzer import analyze_strategy
-from modules.risk_manager import calculate_dynamic_position
+from modules.risk_manager import calculate_trade_risk
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +21,10 @@ def process_market_signals():
     logger.info("🧠 Strategy Brain: Scanning for opportunities...")
 
     from main import db
+    
+    if not db.is_bot_activated():
+        logger.info("🧠 Strategy Brain: Bot is inactive. Skipping scan.")
+        return
     
     # 1. Fetch current state of all tickers
     conn = db._connect()
@@ -50,6 +54,12 @@ def process_market_signals():
         if db.get_active_signals_count() >= 3:
             logger.info("🧠 Strategy Brain: Reached max signals during scan.")
             break
+
+        # ── ONE ACTIVE TRADE PER TICKER LOCK ──────────────────────
+        active_signals = db.get_signals_by_status('ACTIVE') + db.get_signals_by_status('PENDING')
+        if any(s.get('ticker') == alt for s in active_signals):
+            logger.info(f"Skipping {alt}: Active trade already exists.")
+            continue
 
         state = market_data.get(alt)
         if not state or state['price'] <= 0.0:
@@ -87,10 +97,8 @@ def process_market_signals():
                 trade_type = str(decision_data.get("type", "LONG")).upper()
                 
                 try:
-                    # Risk Management Integration: calculate risk based on 5% of $1000
-                    risk_result = calculate_dynamic_position(
-                        balance=1000.0,
-                        risk_percent=5.0,
+                    # Risk Management Integration — AUTHORITATIVE source for TP/SL
+                    risk_result = calculate_trade_risk(
                         entry_price=current_price,
                         support=mkt_struct.support,
                         resistance=mkt_struct.resistance,
@@ -98,29 +106,55 @@ def process_market_signals():
                         ai_direction=trade_type
                     )
                     
-                    tp = float(decision_data.get("tp", risk_result.take_profit_price))
-                    sl = float(decision_data.get("sl", risk_result.stop_loss_price))
+                    # Use risk manager's TP as the MINIMUM floor.
+                    # The AI's TP is only accepted if it is MORE ambitious.
+                    ai_tp = float(decision_data.get("tp", 0.0))
+                    ai_sl = float(decision_data.get("sl", 0.0))
+                    
+                    if trade_type == "LONG":
+                        tp = max(ai_tp, risk_result.take_profit) if ai_tp > 0 else risk_result.take_profit
+                        sl = ai_sl if 0 < ai_sl < current_price else risk_result.stop_loss
+                    else:  # SHORT
+                        tp = min(ai_tp, risk_result.take_profit) if ai_tp > 0 else risk_result.take_profit
+                        sl = ai_sl if ai_sl > current_price else risk_result.stop_loss
+                    
+                    leverage = int(decision_data.get("leverage", 1))
+                    
+                    # ── HARD R/R BLOCK — calculated on final TP/SL ────────
+                    actual_risk = current_price - sl if trade_type == "LONG" else sl - current_price
+                    potential_reward = tp - current_price if trade_type == "LONG" else current_price - tp
+                    rr_ratio = potential_reward / actual_risk if actual_risk > 0 else 0
+
+                    if rr_ratio < 1.5:
+                        logger.warning(f"Trade aborted: R/R < 1.5 for {alt} (R/R={rr_ratio:.2f}, TP={tp:.4f}, SL={sl:.4f})")
+                        continue
 
                     # Multi-TP Calculation (for the virtual ledger)
-                    dist = tp - current_price
-                    tp1 = current_price + (dist * 0.33)
-                    tp2 = current_price + (dist * 0.66)
-                    tp3 = tp
+                    if trade_type == "LONG":
+                        dist = tp - current_price
+                        tp1 = current_price + (dist * 0.33)
+                        tp2 = current_price + (dist * 0.66)
+                        tp3 = tp
+                    else:
+                        dist = current_price - tp
+                        tp1 = current_price - (dist * 0.33)
+                        tp2 = current_price - (dist * 0.66)
+                        tp3 = tp
 
                     # Safely insert the finalized signal (now as PENDING for virtual tracker)
                     if tp > 0 and sl > 0:
                         db.add_signal(alt, trade_type, current_price, tp1, tp2, tp3, sl)
-                        logger.info(f"🚀 SIGNAL GENERATED: {alt} | Type: {trade_type} | TP3: {tp3:.4f} | SL: {sl:.4f} | AI Comment: {decision_data.get('comment')}")
+                        logger.info(f"🚀 SIGNAL GENERATED: {alt} | Type: {trade_type} | TP: {tp:.4f} | SL: {sl:.4f} | R/R: 1:{rr_ratio:.2f} | AI Comment: {decision_data.get('comment')}")
                         
                         from modules.notifier import send_signal_alert
                         send_signal_alert({
                             "ticker": alt,
                             "type": trade_type,
                             "entry_price": current_price,
-                            "tp1": tp1,
-                            "tp2": tp2,
-                            "tp3": tp3,
+                            "tp": tp,
                             "sl": sl,
+                            "rr_ratio": rr_ratio,
+                            "leverage": leverage,
                             "comment": decision_data.get('comment', '')
                         })
                         
@@ -128,3 +162,4 @@ def process_market_signals():
                     logger.warning(f"Strategy Brain: Risk calculation failed for {alt} - {e}")
             else:
                 logger.info(f"🧠 Strategy Brain: Gemini decided WAIT for {alt}. Reason: {decision_data.get('comment')}")
+
