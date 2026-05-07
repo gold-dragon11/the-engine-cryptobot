@@ -324,6 +324,7 @@ async def market_watcher(app: Application) -> None:
                             from modules.notifier import send_signal_alert
                             if config.ADMIN_CHAT_ID:
                                 send_signal_alert(signal_data)
+                                db.add_signal(coin, sentiment.direction, dyn_result.entry_price, dyn_result.take_profit, 0.0, 0.0, dyn_result.stop_loss)
                             else:
                                 logger.warning(f"No ADMIN_CHAT_ID found in config. Cannot send alert for {coin}.")
                     else:
