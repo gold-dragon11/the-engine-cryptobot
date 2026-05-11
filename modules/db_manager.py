@@ -264,3 +264,11 @@ class DatabaseManager:
             "total_pnl": round(total_pnl, 2),
             "best_coin": best_coin
         }
+    def has_active_trade(self, ticker):
+        """Перевіряє, чи є активна угода по тикеру (PENDING або ACTIVE)."""
+        conn = self._connect()
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM signals WHERE ticker = ? AND status IN ('PENDING', 'ACTIVE')", (ticker,))
+        count = cursor.fetchone()[0]
+        conn.close()
+        return count > 0

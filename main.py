@@ -288,15 +288,15 @@ async def market_watcher(app: Application) -> None:
 
                     # Filter: Direction LONG/SHORT AND confidence >= CONFIDENCE_THRESHOLD
                     if sentiment.direction in ["LONG", "SHORT"] and sentiment.confidence >= CONFIDENCE_THRESHOLD:
-                        # Anti-Spam check
-                        active_signals = db.get_signals_by_status('ACTIVE') + db.get_signals_by_status('PENDING')
-                        if any(s.get('ticker') == coin or s.get('ticker') == symbol.replace('/', '') for s in active_signals):
-                            logger.info(f"Anti-spam: Signal for {coin} already active/pending.")
+                    # Anti-Spam check
+                    # Anti-Spam check
+                        if db.has_active_trade(coin):
+                            logger.info(f"🛡️ HARD Anti-Spam: {coin} вже в базі. Пропускаємо аналіз.")
                             continue
 
                         dyn_result = None
                         prof = {"balance": 1000.0, "risk_percent": 2.0} # Fallback
-                        
+
                         if mkt_structure.atr_14:
                             try:
                                 dyn_result = calculate_trade_risk(
