@@ -47,21 +47,29 @@ async def run_performance_tracker(db):
 
                 side = sig['type']
                 entry = sig['entry_price']
-                tp1 = sig['tp1']
-                tp3 = sig['tp3']
-                sl = sig['sl']
-                tp1_hit = bool(sig['tp1_hit'])
-                
+                tp1   = sig.get('tp1')   # May be None for pre-migration rows
+                tp3   = sig.get('tp3')
+                sl    = sig.get('sl')
+                tp1_hit = bool(sig.get('tp1_hit', 0))
+
+                # Guard: skip any row with NULL critical fields
+                if tp3 is None or sl is None:
+                    logger.warning(
+                        "⚠️ Tracker: signal id=%s for %s has NULL tp3 or sl — skipping.",
+                        sig.get('id'), ticker,
+                    )
+                    continue
+
                 closed = False
                 pnl = 0.0
-                
+
                 if side == 'LONG':
                     # TP1 Hit? (Move SL to Breakeven)
-                    if not tp1_hit and price >= tp1:
+                    if tp1 is not None and not tp1_hit and price >= tp1:
                         logger.info(f"🎯 {ticker} TP1 hit. Moving SL to breakeven.")
                         db.mark_tp1_hit(sig['id'], entry)
-                    
-                    # TP3 Hit? (Strict hit)
+
+                    # TP3 Hit?
                     if price >= tp3:
                         closed = True
                         pnl = ((tp3 / entry) - 1) * 100
@@ -69,12 +77,12 @@ async def run_performance_tracker(db):
                     elif price <= sl:
                         closed = True
                         pnl = ((sl / entry) - 1) * 100
-                
+
                 elif side == 'SHORT':
-                    if not tp1_hit and price <= tp1:
+                    if tp1 is not None and not tp1_hit and price <= tp1:
                         logger.info(f"🎯 {ticker} TP1 hit (SHORT). Moving SL to breakeven.")
                         db.mark_tp1_hit(sig['id'], entry)
-                    
+
                     if price <= tp3:
                         closed = True
                         pnl = (1 - (tp3 / entry)) * 100

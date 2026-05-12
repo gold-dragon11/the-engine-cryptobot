@@ -39,6 +39,7 @@ from modules.news_utils import get_latest_news
 from modules.ai_analyzer import analyze_sentiment, analyze_performance
 from modules.i18n import i18n, LANGUAGE_NAMES
 from modules.performance_tracker import run_performance_tracker
+from modules.reporter import run_daily_reporter
 
 # ── Logging ──────────────────────────────────────────────────
 logging.basicConfig(
@@ -49,9 +50,11 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ── Configuration Variables (The Watcher) ────────────────────
-WATCHED_COINS = ["BTC/USDT", "ETH/USDT", "BNB/USDT", "SOL/USDT", "XRP/USDT", "ADA/USDT"]
+WATCHED_COINS = ["BTC/USDT", "SOL/USDT", "TAO/USDT", "ONDO/USDT", "RENDER/USDT", "PEPE/USDT", "TON/USDT"]
 MONITOR_INTERVAL = 1800  # 30 minutes
-CONFIDENCE_THRESHOLD = 8
+# Lowered from 8 → 6: threshold of 8 was rejecting almost every valid setup.
+# 6 means Gemini must be at least 60% confident to fire an alert.
+CONFIDENCE_THRESHOLD = 6
 
 # ── User language preferences ──────────────────────────────────
 # Language is persisted via user_profiles.json
@@ -185,7 +188,6 @@ async def binance_stream_watcher() -> None:
     backoff = 10
     while True:
         try:
-            from main import db
             if not db.is_bot_activated():
                 await asyncio.sleep(60)
                 continue
@@ -221,51 +223,73 @@ async def binance_stream_watcher() -> None:
 
 # ── The Watcher (Background Monitor) ─────────────────────────
 async def market_watcher(app: Application) -> None:
-    """Autonomous background loop scanning the market."""
+    """Autonomous background loop scanning the market every 30 minutes."""
     await asyncio.sleep(5)  # Let the bot connect and start polling smoothly
     logger.info("👁️ THE WATCHER: Background market monitor started")
-    
+
     from modules.finance import _fetch_ticker_safe
-    
+
     while True:
         try:
-            from main import db
             if not db.is_bot_activated():
                 await asyncio.sleep(60)
                 continue
-                
+
+            logger.info("👁️ THE WATCHER: ── Starting scan of %d coins ──────────", len(WATCHED_COINS))
+            # Per-cycle dedup: prevents two coins from using the same Gemini call
+            _watcher_scanned: set = set()
+
             for symbol in WATCHED_COINS:
                 coin = symbol.split('/')[0]
+
+                # ── Deduplication guard ───────────────────────────────────
+                if coin in _watcher_scanned:
+                    logger.info("👁️ SKIPPED  [%s]: Duplicate in scan cycle.", coin)
+                    continue
+                _watcher_scanned.add(coin)
+
                 try:
                     loop = asyncio.get_event_loop()
-                    
+
                     # a) Fetch Technicals
                     ticker = await loop.run_in_executor(None, _fetch_ticker_safe, symbol)
                     mkt_structure = await loop.run_in_executor(None, fetch_market_structure, symbol)
-                    
-                    if not ticker or 'last' not in ticker or not mkt_structure:
-                        logger.warning(f"Watcher: Missing technical data for {symbol}")
-                        await asyncio.sleep(2)  # Brief pause before next coin
+
+                    if not ticker or 'last' not in ticker:
+                        logger.warning("👁️ REJECTED [%s]: Could not fetch ticker data.", coin)
+                        db.log_rejection(coin, "Could not fetch ticker data from Binance")
+                        continue
+                    if not mkt_structure:
+                        logger.warning("👁️ REJECTED [%s]: fetch_market_structure returned None.", coin)
+                        db.log_rejection(coin, "fetch_market_structure returned None")
                         continue
 
                     current_price = ticker["last"]
-                    volume_24h = ticker.get("baseVolume", 0)
-                    
-                    fng_data = await loop.run_in_executor(None, fetch_fear_and_greed)
+                    volume_24h    = ticker.get("baseVolume", 0)
+
+                    fng_data    = await loop.run_in_executor(None, fetch_fear_and_greed)
                     fng_display = fng_data.get("display", "N/A")
 
                     # b) Fetch News
                     _, _, micro_items, macro_items = await loop.run_in_executor(None, get_latest_news, coin)
-                    
+
                     def _fmt_news_block(items) -> str:
                         if not items:
                             return ""
-                        return "\n\n".join(f"{i}. [{it.source}] {it.title}\n   {it.summary}" for i, it in enumerate(items, 1))
+                        return "\n\n".join(
+                            f"{i}. [{it.source}] {it.title}\n   {it.summary}"
+                            for i, it in enumerate(items, 1)
+                        )
 
                     micro_text = _fmt_news_block(micro_items[:4])
                     macro_text = _fmt_news_block(macro_items[:4])
 
-                    # c) Call ai_analyzer — rate-limit guard follows immediately after
+                    # c) Gemini sentiment call
+                    _admin_lang = (
+                        _lang(int(config.ADMIN_CHAT_ID))
+                        if config.ADMIN_CHAT_ID and str(config.ADMIN_CHAT_ID).lstrip('-').isdigit()
+                        else "en"
+                    )
                     sentiment = await loop.run_in_executor(
                         None,
                         lambda: analyze_sentiment(
@@ -279,68 +303,95 @@ async def market_watcher(app: Application) -> None:
                             rsi_14=mkt_structure.rsi_14,
                             support=mkt_structure.support,
                             resistance=mkt_structure.resistance,
-                            lang=_lang(int(config.ADMIN_CHAT_ID)) if config.ADMIN_CHAT_ID and str(config.ADMIN_CHAT_ID).lstrip('-').isdigit() else "en"
+                            lang=_admin_lang,
                         ),
                     )
-                    # Gemini rate-limit cooldown: pause 15s between coins so the
-                    # Watcher's 6-coin scan stays comfortably within free-tier RPM.
+                    # Rate-limit cooldown between coins (free-tier RPM)
                     await asyncio.sleep(15)
 
-                    # Filter: Direction LONG/SHORT AND confidence >= CONFIDENCE_THRESHOLD
-                    if sentiment.direction in ["LONG", "SHORT"] and sentiment.confidence >= CONFIDENCE_THRESHOLD:
-                    # Anti-Spam check
-                    # Anti-Spam check
-                        if db.has_active_trade(coin):
-                            logger.info(f"🛡️ HARD Anti-Spam: {coin} вже в базі. Пропускаємо аналіз.")
-                            continue
+                    # d) Rejection filters with explicit logging
+                    if sentiment.direction not in ("LONG", "SHORT"):
+                        logger.info(
+                            "👁️ REJECTED [%s]: Gemini direction='%s' (need LONG or SHORT).",
+                            coin, sentiment.direction,
+                        )
+                        db.log_rejection(coin, f"Gemini direction='{sentiment.direction}' not actionable")
+                        continue
 
-                        dyn_result = None
-                        prof = {"balance": 1000.0, "risk_percent": 2.0} # Fallback
+                    if sentiment.confidence < CONFIDENCE_THRESHOLD:
+                        logger.info(
+                            "👁️ REJECTED [%s]: Confidence=%d < threshold=%d. Reasoning: %s",
+                            coin, sentiment.confidence, CONFIDENCE_THRESHOLD, sentiment.reasoning,
+                        )
+                        db.log_rejection(
+                            coin,
+                            f"Confidence={sentiment.confidence} < threshold={CONFIDENCE_THRESHOLD}",
+                        )
+                        continue
 
-                        if mkt_structure.atr_14:
-                            try:
-                                dyn_result = calculate_trade_risk(
-                                    entry_price=current_price,
-                                    support=mkt_structure.support,
-                                    resistance=mkt_structure.resistance,
-                                    atr_14=mkt_structure.atr_14,
-                                    ai_direction=sentiment.direction
-                                )
-                            except Exception as e:
-                                logger.warning(f"Watcher dynamic risk calc error for {coin}: {e}")
+                    if db.has_active_trade(coin):
+                        logger.info("👁️ REJECTED [%s]: Active trade already in DB.", coin)
+                        db.log_rejection(coin, "Active trade already open")
+                        continue
 
-                        if dyn_result:
-                            signal_data = {
-                                "ticker": coin,
-                                "type": sentiment.direction,
-                                "entry_price": dyn_result.entry_price,
-                                "sl": dyn_result.stop_loss,
-                                "tp": dyn_result.take_profit,
-                                "rr_ratio": dyn_result.rr_ratio,
-                                "leverage": sentiment.leverage,
-                                "comment": sentiment.reasoning
-                            }
-                            
-                            from modules.notifier import send_signal_alert
-                            if config.ADMIN_CHAT_ID:
-                                send_signal_alert(signal_data)
-                                db.add_signal(coin, sentiment.direction, dyn_result.entry_price, dyn_result.take_profit, 0.0, 0.0, dyn_result.stop_loss)
-                            else:
-                                logger.warning(f"No ADMIN_CHAT_ID found in config. Cannot send alert for {coin}.")
-                    else:
-                        print(f"[{coin}] Silently passed. Reason: {sentiment.direction}, Conf: {sentiment.confidence}")
+                    # e) Risk calculation
+                    if not mkt_structure.atr_14:
+                        logger.warning("👁️ REJECTED [%s]: ATR(14) unavailable — cannot size the trade.", coin)
+                        db.log_rejection(coin, "ATR(14) unavailable")
+                        continue
 
-                except Exception as e:
-                    logger.error(f"Error watching {coin}: {e}")
-                    await asyncio.sleep(5)  # Brief backoff on per-coin errors
+                    try:
+                        dyn_result = calculate_trade_risk(
+                            entry_price=current_price,
+                            support=mkt_structure.support,
+                            resistance=mkt_structure.resistance,
+                            atr_14=mkt_structure.atr_14,
+                            ai_direction=sentiment.direction,
+                        )
+                    except Exception as exc:
+                        logger.warning("👁️ REJECTED [%s]: Risk calc error — %s", coin, exc)
+                        continue
+
+                    if not config.ADMIN_CHAT_ID:
+                        logger.warning("👁️ REJECTED [%s]: ADMIN_CHAT_ID not set — nowhere to send alert.", coin)
+                        continue
+
+                    signal_data = {
+                        "ticker":      coin,
+                        "type":        sentiment.direction,
+                        "entry_price": dyn_result.entry_price,
+                        "sl":          dyn_result.stop_loss,
+                        "tp":          dyn_result.take_profit,
+                        "rr_ratio":    dyn_result.rr_ratio,
+                        "leverage":    sentiment.leverage,
+                        "comment":     sentiment.reasoning,
+                    }
+                    from modules.notifier import send_signal_alert
+                    send_signal_alert(signal_data)
+                    db.add_signal(
+                        coin, sentiment.direction,
+                        dyn_result.entry_price, dyn_result.take_profit,
+                        0.0, 0.0, dyn_result.stop_loss,
+                    )
+                    logger.info(
+                        "🚀 SIGNAL   [%s]: %s | Conf=%d | Entry=%.4f | TP=%.4f | SL=%.4f | R/R=1:%.2f",
+                        coin, sentiment.direction, sentiment.confidence,
+                        dyn_result.entry_price, dyn_result.take_profit,
+                        dyn_result.stop_loss, dyn_result.rr_ratio,
+                    )
+
+                except Exception as exc:
+                    logger.error("👁️ ERROR    [%s]: %s", coin, exc)
+                    await asyncio.sleep(5)
+
+            logger.info("👁️ THE WATCHER: ── Scan complete. Sleeping %ds ──────────", MONITOR_INTERVAL)
 
         except asyncio.CancelledError:
             logger.info("market_watcher: shutdown signal received.")
             return
-        except Exception as e:
-            logger.error(f"Market watcher loop error: {e}")
+        except Exception as exc:
+            logger.error("Market watcher loop error: %s", exc)
 
-        # Sleep Cycle
         await asyncio.sleep(MONITOR_INTERVAL)
 
 
@@ -402,6 +453,7 @@ def main() -> None:
         application.create_task(binance_stream_watcher())
         application.create_task(market_watcher(application))
         application.create_task(run_performance_tracker(db))
+        application.create_task(run_daily_reporter(db))
 
     app = Application.builder().token(config.TELEGRAM_BOT_TOKEN).post_init(post_init).build()
 

@@ -262,8 +262,12 @@ def get_latest_news(
     all_micro: list[NewsItem] = []
     all_macro: list[NewsItem] = []
 
+    if not RSS_FEEDS:
+        logger.warning("get_latest_news: RSS_FEEDS list is empty — no news will be fetched.")
+        return [], "", [], []
+
     # Fetch all feeds concurrently
-    with ThreadPoolExecutor(max_workers=len(RSS_FEEDS)) as executor:
+    with ThreadPoolExecutor(max_workers=max(1, len(RSS_FEEDS))) as executor:
         futures = {
             executor.submit(_fetch_feed_dual, url, keywords): url
             for url in RSS_FEEDS

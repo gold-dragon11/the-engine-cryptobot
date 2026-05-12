@@ -92,6 +92,23 @@ class DatabaseManager:
             except Exception as e:
                 logger.error(f"Migration error column is_active: {e}")
 
+        # ── Audit tables (added for daily reporter) ─────────────────────────
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS rejection_log (
+                id        INTEGER PRIMARY KEY AUTOINCREMENT,
+                ticker    TEXT,
+                reason    TEXT,
+                logged_at DATETIME
+            )
+        ''')
+
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS gemini_calls (
+                id        INTEGER PRIMARY KEY AUTOINCREMENT,
+                called_at DATETIME
+            )
+        ''')
+
         cursor.execute("PRAGMA journal_mode=WAL;")
         conn.commit()
         conn.close()
@@ -272,3 +289,33 @@ class DatabaseManager:
         count = cursor.fetchone()[0]
         conn.close()
         return count > 0
+
+    # ── Daily reporter helpers ────────────────────────────────────────────────
+
+    def log_rejection(self, ticker: str, reason: str):
+        """Record a trade rejection so the daily reporter can count reasons."""
+        try:
+            conn = self._connect()
+            cursor = conn.cursor()
+            cursor.execute(
+                "INSERT INTO rejection_log (ticker, reason, logged_at) VALUES (?, ?, ?)",
+                (ticker, reason, datetime.now()),
+            )
+            conn.commit()
+            conn.close()
+        except Exception as exc:
+            logger.warning("log_rejection failed: %s", exc)
+
+    def log_gemini_call(self):
+        """Record that one Gemini API call was made (for daily quota tracking)."""
+        try:
+            conn = self._connect()
+            cursor = conn.cursor()
+            cursor.execute(
+                "INSERT INTO gemini_calls (called_at) VALUES (?)",
+                (datetime.now(),),
+            )
+            conn.commit()
+            conn.close()
+        except Exception as exc:
+            logger.warning("log_gemini_call failed: %s", exc)

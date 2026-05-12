@@ -240,10 +240,17 @@ def analyze_sentiment(
             raw_text = response.text.strip()
             logger.info("Gemini response (attempt %d): %s", attempt, raw_text[:200])
 
+            # ── Track every successful API call for the daily reporter ────────
+            try:
+                from main import db as _db
+                _db.log_gemini_call()
+            except Exception:
+                pass  # Never block the analysis pipeline for a logging failure
+
             result = _parse_ai_json(raw_text)
-            
+
             # If validly parsed, return it
-            if result.reasoning: 
+            if result.reasoning:
                 return result
 
         except Exception as exc:
@@ -343,7 +350,14 @@ def analyze_strategy(ticker: str, price: float, btc_trend: str, support: float, 
             )
             raw_text = response.text.strip()
             logger.info("Strategy Gemini response (attempt %d): %s", attempt, raw_text[:200])
-            
+
+            # ── Track every successful API call for the daily reporter ────────
+            try:
+                from main import db as _db
+                _db.log_gemini_call()
+            except Exception:
+                pass
+
             return parse_strategy_json(raw_text)
             
         except Exception as exc:
